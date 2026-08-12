@@ -3,7 +3,6 @@
 import re
 from typing import List, Optional
 from .models import ValidationResult, Triple, Entity, SchemaContext
-from .config import DBLP_KEY_PREDICATES, DBLP_KEY_CLASSES
 
 
 class SPARQLValidator:
@@ -96,14 +95,11 @@ class SPARQLValidator:
         if not where_clause:
             return errors
 
-        known_predicates = set(DBLP_KEY_PREDICATES)
-        known_classes = set(DBLP_KEY_CLASSES)
+        if not schema_context:
+            return errors
 
-        if schema_context:
-            for p in schema_context.properties:
-                known_predicates.add(p.label)
-            for c in schema_context.classes:
-                known_classes.add(c.label)
+        known_predicates = {p.label for p in schema_context.properties}
+        known_classes = {c.label for c in schema_context.classes}
 
         type_pattern = r"(\??\w+)\s+a\s+(dblp:\w+)"
         type_matches = re.findall(type_pattern, where_clause)
