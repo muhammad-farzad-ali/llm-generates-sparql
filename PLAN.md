@@ -1,87 +1,107 @@
-# Option 1: Remove Hardcoded Filters
+# Option 1: Remove Hardcoded Filters - Implementation Plan
 
 ## Goal
 
 Remove hardcoded `DBLP_KEY_CLASSES` and `DBLP_KEY_PREDICATES` lists so that the system uses the **complete** DBLP schema from `data/schema.ttl`.
 
-## Current Problem
+## Current State
 
-The schema retriever filters classes and predicates using hardcoded lists:
+### Files to Modify
 
-```python
-# src/schema_retriever.py lines 64-75
-def get_relevant_schema(self, entity_types=None):
-    relevant_classes = [
-        c for c in self.classes if any(k in c.label for k in DBLP_KEY_CLASSES)
-    ]
-    relevant_properties = [
-        p for p in self.properties if any(k in p.label for k in DBLP_KEY_PREDICATES)
-    ]
+| File | Current Issue | Fix |
+|------|---------------|-----|
+| `src/config.py` | Hardcoded `DBLP_KEY_CLASSES` (24 items) and `DBLP_KEY_PREDICATES` (70+ items) | Empty these lists |
+| `src/schema_retriever.py` | `get_relevant_schema()` filters by hardcoded lists | Return all classes/properties |
+| `src/validator.py` | `_validate_predicates_and_classes()` uses hardcoded sets | Use schema context only |
+| `src/llm_generator.py` | Prompt includes all schema elements | Limit to top 30 predicates |
+
+## Implementation Steps
+
+### Step 1: Merge feature branch
+
+```bash
+git merge feature/phase1-implementation --no-edit
 ```
 
-This means only ~24 classes and ~70 predicates are used, but the schema has:
-- **24 classes** (currently filtered, all included)
-- **70+ predicates** (only ~70 used, some missing)
+### Step 2: Edit `src/config.py`
 
-## What Changes
+Remove or empty the hardcoded lists:
 
-### File: `src/config.py`
-
-**Remove or empty these lists:**
 ```python
 DBLP_KEY_CLASSES = []    # Use all classes from schema
 DBLP_KEY_PREDICATES = [] # Use all predicates from schema
 ```
 
-### File: `src/schema_retriever.py`
+### Step 3: Edit `src/schema_retriever.py`
 
-**Change `get_relevant_schema()`:**
+Update `get_relevant_schema()` to return ALL classes and properties:
+
 ```python
 def get_relevant_schema(self, entity_types=None):
-    # Use ALL classes and predicates from schema
+    """Get schema context - returns ALL classes and properties."""
     return SchemaContext(classes=self.classes, properties=self.properties)
 ```
 
-### File: `src/validator.py`
+Also remove the import of `DBLP_KEY_CLASSES` and `DBLP_KEY_PREDICATES`.
 
-**Update `_validate_predicates_and_classes()`:**
-- Remove hardcoded set checks
-- Use the schema context passed in for validation
+### Step 4: Edit `src/validator.py`
 
-## What Stays the Same
+Update `_validate_predicates_and_classes()`:
 
-- `KNOWN_PERSON_URIS` and `KNOWN_VENUE_URIS` remain hardcoded (separate concern)
-- Entity linker unchanged
-- LLM generator unchanged
-- Example retriever unchanged
+```python
+def _validate_predicates_and_classes(self, sparql, schema_context):
+    errors = []
+    where_clause = self._extract_where_clause(sparql)
+    if not where_clause:
+        return errors
+
+    # Use schema context if available
+    if not schema_context:
+        return errors
+
+    known_predicates = {p.label for p in schema_context.properties}
+    known_classes = {c.label for c in schema_context.classes}
+
+    # ... validation logic using known_predicates and known_classes
+```
+
+Remove the import of `DBLP_KEY_PREDICATES` and `DBLP_KEY_CLASSES`.
+
+### Step 5: Edit `src/llm_generator.py`
+
+Limit schema context in prompt to top 30 predicates:
+
+```python
+def _build_prompt(self, ...):
+    limited_schema = SchemaContext(
+        classes=schema_context.classes,  # All classes (~24)
+        properties=schema_context.properties[:30]  # Top 30 predicates
+    )
+    parts.append(schema_formatter(limited_schema))
+```
+
+### Step 6: Test and verify
+
+```bash
+# Start server
+python main.py
+
+# Test schema endpoint
+curl http://localhost:8000/api/v1/schema
+
+# Test query
+curl -X POST http://localhost:8000/api/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Papers by Michael Stonebraker", "execute": true}'
+```
 
 ## Risks
 
 | Risk | Mitigation |
 |------|------------|
-| Too many predicates overwhelm LLM | Limit to top 30 most relevant in prompt |
-| Validation becomes too strict | Keep validation lenient for unknown predicates |
-| Longer prompts increase cost | Use GPT-5.4-nano (cheap) |
-
-## Implementation Steps
-
-1. Edit `src/config.py` - empty `DBLP_KEY_CLASSES` and `DBLP_KEY_PREDICATES`
-2. Edit `src/schema_retriever.py` - return all classes/properties
-3. Edit `src/validator.py` - use schema context instead of hardcoded sets
-4. Test with sample queries
-5. Commit and push
-
-## Testing
-
-```bash
-# Test schema endpoint returns all classes
-curl http://localhost:8000/api/v1/schema | python -m json.tool | grep "count"
-
-# Test query still works
-curl -X POST http://localhost:8000/api/v1/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "Papers by Michael Stonebraker", "execute": true}'
-```
+| Too many predicates overwhelm LLM | Limit to top 30 in prompt |
+| Validation too strict | Use schema context only, skip if not provided |
+| Longer prompts increase cost | GPT-5.4-nano is cheap |
 
 ## Success Criteria
 
