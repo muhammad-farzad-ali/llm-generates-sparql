@@ -62,7 +62,7 @@ class LLMGenerator:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=LLM_TEMPERATURE,
-                max_tokens=LLM_MAX_TOKENS,
+                max_completion_tokens=LLM_MAX_TOKENS,
             )
 
             raw_sparql = response.choices[0].message.content or ""
@@ -168,7 +168,7 @@ Fix the query. Return ONLY the corrected SPARQL, no explanation."""
                     {"role": "user", "content": repair_prompt},
                 ],
                 temperature=0.0,
-                max_tokens=LLM_MAX_TOKENS,
+                max_completion_tokens=LLM_MAX_TOKENS,
             )
             return self._clean_sparql(response.choices[0].message.content or "")
         except Exception:
