@@ -102,7 +102,11 @@ class LLMGenerator:
         """Build complete prompt with all context."""
         parts = []
 
-        parts.append(schema_formatter(schema_context))
+        limited_schema = SchemaContext(
+            classes=schema_context.classes,
+            properties=schema_context.properties[:30],
+        )
+        parts.append(schema_formatter(limited_schema))
 
         parts.append("\nENTITIES:")
         for entity in entities:
