@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 from rdflib import Graph, RDF, RDFS, OWL
 from .models import SchemaClass, SchemaProperty, SchemaContext
-from .config import SCHEMA_PATH, DBLP_KEY_PREDICATES, DBLP_KEY_CLASSES
+from .config import SCHEMA_PATH
 
 
 class SchemaRetriever:
@@ -64,15 +64,8 @@ class SchemaRetriever:
     def get_relevant_schema(
         self, entity_types: Optional[List[str]] = None
     ) -> SchemaContext:
-        """Get schema context relevant to the query."""
-        relevant_classes = [
-            c for c in self.classes if any(k in c.label for k in DBLP_KEY_CLASSES)
-        ]
-        relevant_properties = [
-            p for p in self.properties if any(k in p.label for k in DBLP_KEY_PREDICATES)
-        ]
-
-        return SchemaContext(classes=relevant_classes, properties=relevant_properties)
+        """Get schema context - returns ALL classes and properties from DBLP schema."""
+        return SchemaContext(classes=self.classes, properties=self.properties)
 
     def format_for_prompt(self, context: SchemaContext) -> str:
         """Format schema context for LLM prompt."""
