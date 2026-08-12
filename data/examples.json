@@ -1,0 +1,58 @@
+[
+  {
+    "id": 1,
+    "question": "Which papers did Michael Stonebraker author?",
+    "sparql": "SELECT ?pub ?title WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/s/MichaelStonebraker> . ?pub dblp:title ?title . }",
+    "query_type": "author_publications",
+    "similarity": 0.0
+  },
+  {
+    "id": 2,
+    "question": "How many publications does Geoffrey Hinton have?",
+    "sparql": "SELECT (COUNT(?pub) AS ?count) WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/h/GeoffreyHinton> . }",
+    "query_type": "count_publications",
+    "similarity": 0.0
+  },
+  {
+    "id": 3,
+    "question": "What papers were published at SIGMOD 2023?",
+    "sparql": "SELECT ?pub ?title WHERE { ?pub dblp:publishedInStream <https://dblp.org/conf/sigmod> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication \"2023\" . }",
+    "query_type": "venue_publications",
+    "similarity": 0.0
+  },
+  {
+    "id": 4,
+    "question": "Which papers did Alice publish after 2020?",
+    "sparql": "SELECT ?pub ?title WHERE { ?pub dblp:authoredBy <ALICE_URI> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication ?year . FILTER(?year > \"2020\") }",
+    "query_type": "year_filter",
+    "similarity": 0.0
+  },
+  {
+    "id": 5,
+    "question": "Who are the co-authors of Donald Knuth?",
+    "sparql": "SELECT DISTINCT ?coauthor ?name WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/k/DEKnuth> . ?pub dblp:authoredBy ?coauthor . ?coauthor dblp:creatorName ?name . FILTER(?coauthor != <https://dblp.org/pid/k/DEKnuth>) }",
+    "query_type": "co_authors",
+    "similarity": 0.0
+  },
+  {
+    "id": 6,
+    "question": "Find all papers about machine learning published in 2024.",
+    "sparql": "SELECT ?pub ?title WHERE { ?pub dblp:title ?title . ?pub dblp:yearOfPublication \"2024\" . FILTER(CONTAINS(LCASE(?title), \"machine learning\")) }",
+    "query_type": "keyword_search",
+    "similarity": 0.0
+  },
+  {
+    "id": 7,
+    "question": "List all journals in the DBLP database.",
+    "sparql": "SELECT ?journal ?title WHERE { ?journal a dblp:Journal . ?journal dblp:streamTitle ?title . }",
+    "query_type": "list_venues",
+    "similarity": 0.0
+  },
+  {
+    "id": 8,
+    "question": "What is the DOI of the paper with title 'Database System Concepts'?",
+    "sparql": "SELECT ?doi WHERE { ?pub dblp:title \"Database System Concepts\" . ?pub dblp:doi ?doi . }",
+    "query_type": "doi_lookup",
+    "similarity": 0.0
+  }
+]
