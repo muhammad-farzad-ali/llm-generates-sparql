@@ -31,7 +31,7 @@ class ExampleRetriever:
             self._create_default_examples()
 
     def _create_default_examples(self):
-        """Create default few-shot examples."""
+        """Create default few-shot examples with correct DBLP URIs."""
         self.examples = [
             Example(
                 id=1,
@@ -48,38 +48,62 @@ class ExampleRetriever:
             Example(
                 id=3,
                 question="What papers were published at SIGMOD 2023?",
-                sparql='SELECT ?pub ?title WHERE { ?pub dblp:publishedInStream <https://dblp.org/conf/sigmod> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication "2023" . }',
+                sparql='SELECT ?pub ?title WHERE { ?pub dblp:publishedInStream <https://dblp.org/streams/conf/sigmod> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication "2023" . }',
                 query_type="venue_publications",
             ),
             Example(
                 id=4,
-                question="Which papers did Alice publish after 2020?",
-                sparql='SELECT ?pub ?title WHERE { ?pub dblp:authoredBy <ALICE_URI> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication ?year . FILTER(?year > "2020") }',
-                query_type="year_filter",
+                question="Which papers did Donald Knuth author?",
+                sparql="SELECT ?pub ?title WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/k/DEKnuth> . ?pub dblp:title ?title . }",
+                query_type="author_publications",
             ),
             Example(
                 id=5,
-                question="Who are the co-authors of Donald Knuth?",
-                sparql="SELECT DISTINCT ?coauthor ?name WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/k/DEKnuth> . ?pub dblp:authoredBy ?coauthor . ?coauthor dblp:creatorName ?name . FILTER(?coauthor != <https://dblp.org/pid/k/DEKnuth>) }",
+                question="Who are the co-authors of Yann LeCun?",
+                sparql="SELECT DISTINCT ?coauthor ?name WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/l/LeCunYann> . ?pub dblp:authoredBy ?coauthor . ?coauthor dblp:creatorName ?name . FILTER(?coauthor != <https://dblp.org/pid/l/LeCunYann>) }",
                 query_type="co_authors",
             ),
             Example(
                 id=6,
-                question="Find all papers about machine learning published in 2024.",
-                sparql='SELECT ?pub ?title WHERE { ?pub dblp:title ?title . ?pub dblp:yearOfPublication "2024" . FILTER(CONTAINS(LCASE(?title), "machine learning")) }',
-                query_type="keyword_search",
-            ),
-            Example(
-                id=7,
-                question="List all journals in the DBLP database.",
+                question="List all journals in DBLP",
                 sparql="SELECT ?journal ?title WHERE { ?journal a dblp:Journal . ?journal dblp:streamTitle ?title . }",
                 query_type="list_venues",
             ),
             Example(
+                id=7,
+                question="Find all papers about machine learning published in 2024",
+                sparql='SELECT ?pub ?title WHERE { ?pub dblp:title ?title . ?pub dblp:yearOfPublication "2024" . FILTER(CONTAINS(LCASE(?title), "machine learning")) }',
+                query_type="keyword_search",
+            ),
+            Example(
                 id=8,
-                question="What is the DOI of the paper with title 'Database System Concepts'?",
-                sparql='SELECT ?doi WHERE { ?pub dblp:title "Database System Concepts" . ?pub dblp:doi ?doi . }',
+                question="What is the DOI of the paper titled 'Attention Is All You Need'?",
+                sparql='SELECT ?doi WHERE { ?pub dblp:title "Attention Is All You Need" . ?pub dblp:doi ?doi . }',
                 query_type="doi_lookup",
+            ),
+            Example(
+                id=9,
+                question="Which papers were published at VLDB 2023?",
+                sparql='SELECT ?pub ?title WHERE { ?pub dblp:publishedInStream <https://dblp.org/streams/conf/vldb> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication "2023" . }',
+                query_type="venue_publications",
+            ),
+            Example(
+                id=10,
+                question="Find papers by author Christos Faloutsos",
+                sparql="SELECT ?pub ?title WHERE { ?pub dblp:authoredBy <https://dblp.org/pid/f/ChristosFaloutsos> . ?pub dblp:title ?title . }",
+                query_type="author_publications",
+            ),
+            Example(
+                id=11,
+                question="List top 5 publications of venue SIGIR",
+                sparql="SELECT ?pub ?title ?year WHERE { ?pub dblp:publishedInStream <https://dblp.org/streams/conf/sigir> . ?pub dblp:title ?title . ?pub dblp:yearOfPublication ?year . } ORDER BY DESC(?year) LIMIT 5",
+                query_type="venue_top_publications",
+            ),
+            Example(
+                id=12,
+                question="How many papers were published at SIGMOD in 2023?",
+                sparql='SELECT (COUNT(?pub) AS ?count) WHERE { ?pub dblp:publishedInStream <https://dblp.org/streams/conf/sigmod> . ?pub dblp:yearOfPublication "2023" . }',
+                query_type="venue_count",
             ),
         ]
         self._save_examples()
@@ -112,6 +136,10 @@ class ExampleRetriever:
                 score += 0.5
             elif "papers" in question_lower and "author" in ex.query_type:
                 score += 0.3
+            elif "list" in question_lower and "list" in ex.query_type:
+                score += 0.4
+            elif "top" in question_lower and "top" in ex.query_type:
+                score += 0.4
 
             scored.append((score, ex))
 

@@ -1,10 +1,18 @@
 """Entity linker: maps natural language mentions to DBLP URIs."""
 
-import re
+import json
 import httpx
+from pathlib import Path
 from typing import List, Optional
 from .models import Entity
-from .config import DBLP_SEARCH_API
+from .config import (
+    DBLP_SEARCH_API,
+    DBLP_AUTHOR_API,
+    DBLP_VENUE_API,
+    KNOWN_PERSON_URIS,
+    KNOWN_VENUE_URIS,
+    ENTITY_CACHE_PATH,
+)
 
 
 class EntityLinker:
@@ -12,66 +20,195 @@ class EntityLinker:
 
     def __init__(self):
         self.client = httpx.Client(timeout=10.0)
+        self.entity_cache = self._load_cache()
+
+    def _load_cache(self) -> dict:
+        """Load entity cache from file."""
+        if ENTITY_CACHE_PATH.exists():
+            try:
+                with open(ENTITY_CACHE_PATH) as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_cache(self):
+        """Save entity cache to file."""
+        try:
+            ENTITY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(ENTITY_CACHE_PATH, "w") as f:
+                json.dump(self.entity_cache, f, indent=2)
+        except Exception as e:
+            print(f"Warning: Could not save entity cache: {e}")
 
     def link(self, mention: str, entity_hint: Optional[str] = None) -> Optional[Entity]:
         """Link a text mention to a DBLP entity."""
-        try:
-            candidates = self._search_dblp(mention)
-            if not candidates:
-                return self._fallback_link(mention, entity_hint)
+        mention_lower = mention.lower().strip()
 
-            return self._select_best(candidates, mention, entity_hint)
-        except Exception as e:
-            print(f"Entity linking failed for '{mention}': {e}")
-            return self._fallback_link(mention, entity_hint)
-
-    def _fallback_link(
-        self, mention: str, entity_hint: Optional[str]
-    ) -> Optional[Entity]:
-        """Create a fallback entity with constructed URI."""
-        if entity_hint == "Person":
-            pid = self._name_to_pid(mention)
+        if mention_lower in self.entity_cache:
+            cached = self.entity_cache[mention_lower]
             return Entity(
                 mention=mention,
-                uri=f"https://dblp.org/pid/{pid}",
+                uri=cached["uri"],
+                label=cached.get("label", mention),
+                entity_type=cached["type"],
+                confidence=1.0,
+            )
+
+        if entity_hint == "Person" or mention_lower in KNOWN_PERSON_URIS:
+            return self._link_person(mention)
+        elif (
+            entity_hint in ("Conference", "Journal", "Venue")
+            or mention_lower in KNOWN_VENUE_URIS
+        ):
+            return self._link_venue(mention, entity_hint or "Venue")
+        else:
+            return self._link_from_publication_search(mention)
+
+    def _link_person(self, mention: str) -> Optional[Entity]:
+        """Link a person mention to DBLP person URI."""
+        mention_lower = mention.lower().strip()
+
+        if mention_lower in KNOWN_PERSON_URIS:
+            uri = KNOWN_PERSON_URIS[mention_lower]
+            self._cache_entity(mention, uri, "Person")
+            return Entity(
+                mention=mention,
+                uri=uri,
                 label=mention,
                 entity_type="Person",
-                confidence=0.5,
+                confidence=1.0,
             )
-        elif entity_hint in ("Conference", "Journal", "Venue"):
-            vid = mention.lower().replace(" ", "").replace("-", "")
+
+        candidates = self._search_author(mention)
+        if candidates:
+            best = candidates[0]
+            uri = best.get("author-url", "")
+            name = best.get("author", mention)
+            if uri:
+                self._cache_entity(mention, uri, "Person")
+                return Entity(
+                    mention=mention,
+                    uri=uri,
+                    label=name,
+                    entity_type="Person",
+                    confidence=0.9,
+                )
+
+        pid = self._name_to_pid(mention)
+        uri = f"https://dblp.org/pid/{pid}"
+        return Entity(
+            mention=mention,
+            uri=uri,
+            label=mention,
+            entity_type="Person",
+            confidence=0.4,
+        )
+
+    def _link_venue(self, mention: str, hint: str) -> Optional[Entity]:
+        """Link a venue mention to DBLP venue URI."""
+        mention_lower = mention.lower().strip()
+
+        if mention_lower in KNOWN_VENUE_URIS:
+            uri = KNOWN_VENUE_URIS[mention_lower]
+            self._cache_entity(
+                mention, uri, "Conference" if "/conf/" in uri else "Journal"
+            )
             return Entity(
                 mention=mention,
-                uri=f"https://dblp.org/conf/{vid}",
+                uri=uri,
                 label=mention,
-                entity_type=entity_hint,
-                confidence=0.5,
+                entity_type="Conference" if "/conf/" in uri else "Journal",
+                confidence=1.0,
             )
+
+        candidates = self._search_venue(mention)
+        if candidates:
+            best = candidates[0]
+            uri = best.get("url", "")
+            name = best.get("venue", mention)
+            if uri:
+                entity_type = "Conference" if "/conf/" in uri else "Journal"
+                self._cache_entity(mention, uri, entity_type)
+                return Entity(
+                    mention=mention,
+                    uri=uri,
+                    label=name,
+                    entity_type=entity_type,
+                    confidence=0.9,
+                )
+
+        vid = mention_lower.replace(" ", "").replace("-", "")
+        return Entity(
+            mention=mention,
+            uri=f"https://dblp.org/conf/{vid}",
+            label=mention,
+            entity_type=hint,
+            confidence=0.4,
+        )
+
+    def _link_from_publication_search(self, mention: str) -> Optional[Entity]:
+        """Try to find entity from publication search results."""
+        candidates = self._search_publications(mention)
+        if candidates:
+            for c in candidates:
+                info = c.get("info", {})
+                authors = info.get("authors", {}).get("author", [])
+                if isinstance(authors, dict):
+                    authors = [authors]
+
+                for author in authors:
+                    if isinstance(author, dict):
+                        author_name = author.get("text", "")
+                        author_url = author.get("author-url", "")
+                    else:
+                        author_name = str(author)
+                        author_url = ""
+
+                    if mention.lower() in author_name.lower():
+                        if author_url and "/pid/" in author_url:
+                            self._cache_entity(mention, author_url, "Person")
+                            return Entity(
+                                mention=mention,
+                                uri=author_url,
+                                label=author_name,
+                                entity_type="Person",
+                                confidence=0.8,
+                            )
+
         return None
 
-    def _name_to_pid(self, name: str) -> str:
-        """Convert a name to a DBLP pid format."""
-        parts = name.strip().split()
-        if len(parts) < 2:
-            return name.lower().replace(" ", "")
-        last = parts[-1]
-        first_initial = parts[0][0]
-        return f"{last[0].lower()}/{last}{first_initial}"
+    def _search_author(self, query: str) -> List[dict]:
+        """Search DBLP for authors."""
+        params = {"q": query, "format": "json", "h": 5}
+        try:
+            response = self.client.get(DBLP_AUTHOR_API, params=params)
+            response.raise_for_status()
+            data = response.json()
+            hits = data.get("result", {}).get("hits", {}).get("hit", [])
+            if isinstance(hits, dict):
+                hits = [hits]
+            return hits
+        except Exception:
+            return []
 
-    def link_batch(self, mentions: List[dict]) -> List[Entity]:
-        """Link multiple mentions to DBLP entities."""
-        results = []
-        for item in mentions:
-            mention = item.get("text") or item.get("mention", "")
-            hint = item.get("type")
-            entity = self.link(mention, hint)
-            if entity:
-                results.append(entity)
-        return results
+    def _search_venue(self, query: str) -> List[dict]:
+        """Search DBLP for venues."""
+        params = {"q": query, "format": "json", "h": 5}
+        try:
+            response = self.client.get(DBLP_VENUE_API, params=params)
+            response.raise_for_status()
+            data = response.json()
+            hits = data.get("result", {}).get("hits", {}).get("hit", [])
+            if isinstance(hits, dict):
+                hits = [hits]
+            return hits
+        except Exception:
+            return []
 
-    def _search_dblp(self, query: str) -> List[dict]:
-        """Search DBLP for entities matching query."""
-        params = {"q": query, "format": "json", "h": 10}
+    def _search_publications(self, query: str) -> List[dict]:
+        """Search DBLP for publications."""
+        params = {"q": query, "format": "json", "h": 5}
         try:
             response = self.client.get(DBLP_SEARCH_API, params=params)
             response.raise_for_status()
@@ -83,144 +220,34 @@ class EntityLinker:
         except Exception:
             return []
 
-    def _select_best(
-        self, candidates: List[dict], mention: str, hint: Optional[str]
-    ) -> Optional[Entity]:
-        """Select the best matching candidate."""
-        if not candidates:
-            return None
+    def _name_to_pid(self, name: str) -> str:
+        """Convert a name to a DBLP pid format."""
+        parts = name.strip().split()
+        if len(parts) < 2:
+            return name.lower().replace(" ", "")
+        last = parts[-1]
+        first_initial = parts[0][0]
+        return f"{last[0].lower()}/{last}{first_initial}"
 
-        mention_lower = mention.lower().strip()
+    def _cache_entity(self, mention: str, uri: str, entity_type: str):
+        """Cache an entity mapping."""
+        self.entity_cache[mention.lower().strip()] = {
+            "uri": uri,
+            "type": entity_type,
+            "label": mention,
+        }
+        self._save_cache()
 
-        person_candidates = []
-        venue_candidates = []
-        pub_candidates = []
-
-        for c in candidates:
-            info = c.get("info", {})
-            url = info.get("url", "")
-            authors = info.get("authors", {}).get("author", [])
-            if isinstance(authors, dict):
-                authors = [authors]
-
-            if "/pid/" in url:
-                person_candidates.append((c, info, url, authors))
-            elif "/conf/" in url or "/journals/" in url:
-                venue_candidates.append((c, info, url, authors))
-            else:
-                pub_candidates.append((c, info, url, authors))
-
-        if hint == "Person" and person_candidates:
-            return self._score_person(person_candidates, mention)
-        elif hint in ("Conference", "Journal", "Venue") and venue_candidates:
-            return self._score_venue(venue_candidates, mention, hint)
-        elif person_candidates:
-            return self._score_person(person_candidates, mention)
-        elif venue_candidates:
-            return self._score_venue(venue_candidates, mention, hint or "Venue")
-
-        if pub_candidates:
-            return self._score_publication(pub_candidates, mention)
-
-        return None
-
-    def _score_person(self, candidates: List[tuple], mention: str) -> Optional[Entity]:
-        """Score and select best person candidate."""
-        mention_lower = mention.lower()
-        best_score = -1
-        best_entity = None
-
-        for c, info, url, authors in candidates:
-            score = 0.0
-            author_names = [
-                a.get("text", str(a)) if isinstance(a, dict) else str(a)
-                for a in authors
-            ]
-
-            for name in author_names:
-                if mention_lower in name.lower() or name.lower() in mention_lower:
-                    score += 1.0
-                    break
-
-            if score > best_score:
-                best_score = score
-                pid = url.split("/pid/")[-1] if "/pid/" in url else ""
-                label = author_names[0] if author_names else mention
-                best_entity = Entity(
-                    mention=mention,
-                    uri=f"https://dblp.org/pid/{pid}",
-                    label=label,
-                    entity_type="Person",
-                    confidence=min(0.7 + score * 0.3, 1.0),
-                )
-
-        return best_entity
-
-    def _score_venue(
-        self, candidates: List[tuple], mention: str, hint: str
-    ) -> Optional[Entity]:
-        """Score and select best venue candidate."""
-        mention_lower = mention.lower()
-        best_score = -1
-        best_entity = None
-
-        for c, info, url, authors in candidates:
-            score = 0.0
-            title = info.get("title", "").lower()
-
-            if mention_lower in title:
-                score += 1.0
-            elif mention_lower.replace(" ", "") in url.lower():
-                score += 0.8
-
-            if score > best_score:
-                best_score = score
-                if "/conf/" in url:
-                    venue_id = url.split("/conf/")[-1].rstrip("/")
-                    entity_type = "Conference"
-                elif "/journals/" in url:
-                    venue_id = url.split("/journals/")[-1].rstrip("/")
-                    entity_type = "Journal"
-                else:
-                    venue_id = mention.lower().replace(" ", "")
-                    entity_type = hint
-
-                best_entity = Entity(
-                    mention=mention,
-                    uri=f"https://dblp.org/{'conf' if entity_type == 'Conference' else 'journals'}/{venue_id}",
-                    label=info.get("title", mention),
-                    entity_type=entity_type,
-                    confidence=min(0.7 + score * 0.3, 1.0),
-                )
-
-        return best_entity
-
-    def _score_publication(
-        self, candidates: List[tuple], mention: str
-    ) -> Optional[Entity]:
-        """Score and select best publication candidate."""
-        mention_lower = mention.lower()
-        best_score = -1
-        best_entity = None
-
-        for c, info, url, authors in candidates:
-            score = 0.0
-            title = info.get("title", "").lower()
-
-            if mention_lower in title:
-                score += 1.0
-
-            if score > best_score:
-                best_score = score
-                best_entity = Entity(
-                    mention=mention,
-                    uri=url,
-                    label=info.get("title", mention),
-                    entity_type="Publication",
-                    confidence=min(0.5 + score * 0.5, 1.0),
-                )
-
-        return best_entity
+    def link_batch(self, mentions: List[dict]) -> List[Entity]:
+        """Link multiple mentions to DBLP entities."""
+        results = []
+        for item in mentions:
+            mention = item.get("text") or item.get("mention", "")
+            hint = item.get("type")
+            entity = self.link(mention, hint)
+            if entity:
+                results.append(entity)
+        return results
 
     def close(self):
         """Close the HTTP client."""

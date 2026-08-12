@@ -26,9 +26,12 @@ RULES:
 7. Use COUNT/GROUP BY for aggregation queries
 8. Always enclose URIs in angle brackets: <https://dblp.org/...>
 9. Use string literals with quotes: "2023"
+10. For year comparisons, use the format: "2023"^^xsd:gYear
 
 IMPORTANT:
 - The DBLP namespace is: https://dblp.org/rdf/schema#
+- Venue URIs use format: https://dblp.org/streams/conf/sigmod (NOT /conf/sigmod)
+- Person URIs use format: https://dblp.org/pid/s/MichaelStonebraker
 - Do NOT hallucinate URIs - use only the provided entity URIs
 - Do NOT invent predicates - use only the provided schema predicates
 - Return clean, executable SPARQL only"""

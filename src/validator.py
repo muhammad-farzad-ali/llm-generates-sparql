@@ -3,7 +3,7 @@
 import re
 from typing import List, Optional
 from .models import ValidationResult, Triple, Entity, SchemaContext
-from .config import DBLP_KEY_PREDICATES
+from .config import DBLP_KEY_PREDICATES, DBLP_KEY_CLASSES
 
 
 class SPARQLValidator:
@@ -34,7 +34,7 @@ class SPARQLValidator:
         prefix_errors = self._validate_prefixes(sparql)
         errors.extend(prefix_errors)
 
-        pred_errors = self._validate_predicates(sparql, schema_context)
+        pred_errors = self._validate_predicates_and_classes(sparql, schema_context)
         errors.extend(pred_errors)
 
         entity_errors = self._validate_entities(sparql, entities or [])
@@ -51,17 +51,32 @@ class SPARQLValidator:
         )
 
     def _extract_triples(self, sparql: str) -> List[Triple]:
-        """Extract triple patterns from SPARQL."""
+        """Extract triple patterns from SPARQL, handling 'a' as rdf:type."""
         triples = []
-        pattern = r"(\??\w+)\s+(dblp:\w+)\s+(<?[^>\s]+>?|\??\w+)"
-        matches = re.findall(pattern, sparql)
+        where_clause = self._extract_where_clause(sparql)
+        if not where_clause:
+            return triples
+
+        pattern = r"(\??\w+)\s+(a|dblp:\w+)\s+(<?[^>\s]+>?|\??\w+)\s*[.\s]"
+        matches = re.findall(pattern, where_clause)
 
         for match in matches:
+            predicate = match[1]
+            if predicate == "a":
+                predicate = "rdf:type"
+
             triples.append(
-                Triple(subject=match[0], predicate=match[1], object=match[2])
+                Triple(subject=match[0], predicate=predicate, object=match[2])
             )
 
         return triples
+
+    def _extract_where_clause(self, sparql: str) -> str:
+        """Extract the WHERE clause from SPARQL."""
+        match = re.search(r"WHERE\s*\{(.+?)\}", sparql, re.IGNORECASE | re.DOTALL)
+        if match:
+            return match.group(1)
+        return ""
 
     def _validate_prefixes(self, sparql: str) -> List[str]:
         """Check required prefixes are declared."""
@@ -72,22 +87,39 @@ class SPARQLValidator:
 
         return errors
 
-    def _validate_predicates(
+    def _validate_predicates_and_classes(
         self, sparql: str, schema_context: Optional[SchemaContext]
     ) -> List[str]:
-        """Check all predicates exist in schema."""
+        """Check predicates and classes are valid, handling rdf:type."""
         errors = []
-        pred_pattern = r"dblp:(\w+)"
-        predicates_used = set(re.findall(pred_pattern, sparql))
+        where_clause = self._extract_where_clause(sparql)
+        if not where_clause:
+            return errors
 
         known_predicates = set(DBLP_KEY_PREDICATES)
+        known_classes = set(DBLP_KEY_CLASSES)
+
         if schema_context:
             for p in schema_context.properties:
                 known_predicates.add(p.label)
+            for c in schema_context.classes:
+                known_classes.add(c.label)
 
-        for pred in predicates_used:
-            if pred not in known_predicates:
-                errors.append(f"Unknown predicate: dblp:{pred}")
+        type_pattern = r"(\??\w+)\s+a\s+(dblp:\w+)"
+        type_matches = re.findall(type_pattern, where_clause)
+        for match in type_matches:
+            class_name = match[1].replace("dblp:", "")
+            if class_name not in known_classes:
+                errors.append(f"Unknown class: dblp:{class_name}")
+
+        pred_pattern = r"(\??\w+)\s+(dblp:\w+)\s+(<?[^>\s]+>?|\??\w+)"
+        pred_matches = re.findall(pred_pattern, where_clause)
+        for match in pred_matches:
+            predicate = match[1].replace("dblp:", "")
+            if predicate not in known_predicates:
+                subject = match[0]
+                if subject != "a":
+                    errors.append(f"Unknown predicate: dblp:{predicate}")
 
         return errors
 
